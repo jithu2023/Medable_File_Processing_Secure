@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Assessment 4 - File Processing API</title>
+    <style>
+        body { 
+            font-family: Arial, sans-serif; 
+            max-width: 1200px; 
+            margin: 0 auto; 
+            padding: 20px; 
+            background: linear-gradient(135deg, #2c3e50 0%, #3498db 100%);
+            color: white;
+            min-height: 100vh;
+        }
+        .container { 
+            background: rgba(255,255,255,0.1); 
+            backdrop-filter: blur(10px); 
+            border-radius: 15px; 
+            padding: 25px; 
+            margin: 15px 0; 
+            box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+        }
+        .endpoint { 
+            background: rgba(255,255,255,0.1); 
+            padding: 20px; 
+            margin: 15px 0; 
+            border-radius: 10px; 
+            border-left: 4px solid #e74c3c;
+        }
+        .method { 
+            color: #e74c3c; 
+            font-weight: bold; 
+            display: inline-block; 
+            width: 80px; 
+            background: rgba(231,76,60,0.2);
+            padding: 5px 10px;
+            border-radius: 4px;
+            margin-right: 10px;
+        }
+        code { 
+            background: rgba(0,0,0,0.4); 
+            padding: 4px 10px; 
+            border-radius: 6px; 
+            font-family: monospace; 
+            color: #1abc9c;
+            display: inline-block;
+            margin: 2px;
+        }
+        .warning { 
+            background: rgba(255,193,7,0.2); 
+            border-left: 4px solid #f39c12; 
+            padding: 20px; 
+            margin: 15px 0; 
+            border-radius: 8px;
+        }
+        .puzzle { 
+            background: rgba(142,68,173,0.2); 
+            border-left: 4px solid #9b59b6; 
+            padding: 20px; 
+            margin: 15px 0; 
+            border-radius: 8px;
+        }
+        .secret { 
+            background: rgba(231,76,60,0.2); 
+            border-left: 4px solid #e74c3c; 
+            padding: 20px; 
+            margin: 15px 0; 
+            border-radius: 8px;
+        }
+        .success { 
+            background: rgba(39,174,96,0.2); 
+            border-left: 4px solid #27ae60; 
+            padding: 20px; 
+            margin: 15px 0; 
+            border-radius: 8px;
+        }
+        table { 
+            width: 100%; 
+            border-collapse: collapse; 
+            margin: 15px 0; 
+            background: rgba(255,255,255,0.1); 
+            border-radius: 8px; 
+            overflow: hidden;
+        }
+        th, td { 
+            padding: 15px; 
+            text-align: left; 
+            border-bottom: 1px solid rgba(255,255,255,0.1); 
+        }
+        th { 
+            background: rgba(255,255,255,0.2); 
+            font-weight: bold; 
+        }
+        .file-grid { 
+            display: grid; 
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); 
+            gap: 15px; 
+        }
+        .file-card { 
+            background: rgba(255,255,255,0.1); 
+            padding: 15px; 
+            border-radius: 10px; 
+            border-left: 4px solid #3498db;
+        }
+        h1, h2, h3 { 
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.5); 
+        }
+        .badge {
+            display: inline-block;
+            padding: 3px 8px;
+            border-radius: 12px;
+            font-size: 0.8em;
+            font-weight: bold;
+            margin-left: 5px;
+        }
+        .badge-danger { background: #e74c3c; }
+        .badge-warning { background: #f39c12; }
+        .badge-success { background: #27ae60; }
+        .badge-info { background: #3498db; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>📁 Assessment 4: File Upload/Processing API</h1>
+        
+        <div class="warning">
+            <strong>⚠️ Critical Issues Detected:</strong> This API has serious file handling vulnerabilities, error handling problems, and incomplete processing features!
+        </div>
+        
+        <div class="success">
+            <strong>🎯 Your Mission:</strong> Fix file upload security, implement proper processing, and solve the multi-layered puzzle chain!
+        </div>
+    </div>
+
+    <div class="container">
+        <h2>📂 File Upload & Management Endpoints</h2>
+        
+        <div class="endpoint">
+            <div class="method">GET</div>
+            <strong>/api/upload</strong>
+            <p>Get user's uploaded files with pagination</p>
+            <p><strong>Query params:</strong> <code>?page=1&limit=20&status=processed&public=true</code></p>
+            <span class="badge badge-danger">No Auth Required</span>
+        </div>
+        
+        <div class="endpoint">
+            <div class="method">GET</div>
+            <strong>/api/upload/:fileId</strong>
+            <p>Get specific file information and processing results</p>
+            <span class="badge badge-warning">Access Control Broken</span>
+        </div>
+        
+        <div class="endpoint">
+            <div class="method">POST</div>
+            <strong>/api/upload</strong>
+            <p>Upload a new file for processing</p>
+            <p><strong>Content-Type:</strong> <code>multipart/form-data</code></p>
+            <span class="badge badge-danger">Validation Missing</span>
+        </div>
+        
+        <div class="endpoint">
+            <div class="method">PUT</div>
+            <strong>/api/upload/:fileId</strong>
+            <p>Update file metadata</p>
+            <code>{"publicAccess": true, "originalName": "new-name.pdf"}</code>
+            <span class="badge badge-warning">Ownership Check Broken</span>
+        </div>
+        
+        <div class="endpoint">
+            <div class="method">DELETE</div>
+            <strong>/api/upload/:fileId</strong>
+            <p>Delete uploaded file</p>
+            <span class="badge badge-info">Partially Working</span>
+        </div>
+    </div>
+
+    <div class="container">
+        <h2>📊 Sample Files & Processing Status</h2>
+        <div class="file-grid">
+            <div class="file-card">
+                <h4>📄 sample-document.pdf</h4>
+                <p><strong>Status:</strong> <span class="badge badge-success">Processed</span></p>
+                <p><strong>Size:</strong> 2.0 MB</p>
+                <p><strong>Result:</strong> 15 pages, text extracted</p>
+                <p><strong>Issues:</strong> Exposes extracted text</p>
+            </div>
+            <div class="file-card">
+                <h4>📊 company-data.csv</h4>
+                <p><strong>Status:</strong> <span class="badge badge-warning">Processing</span></p>
+                <p><strong>Size:</strong> 1.0 MB</p>
+                <p><strong>Issues:</strong> Marked as public, sensitive data</p>
+                <p><strong>Access:</strong> <span class="badge badge-danger">Public</span></p>
+            </div>
+            <div class="file-card">
+                <h4>🖼️ corrupted-image.jpg</h4>
+                <p><strong>Status:</strong> <span class="badge badge-danger">Error</span></p>
+                <p><strong>Size:</strong> 0 bytes</p>
+                <p><strong>Issues:</strong> Zero-size file accepted</p>
+                <p><strong>Error:</strong> Corrupted file header</p>
+            </div>
+        </div>
+    </div>
+
+    <div class="container">
+        <h2>🔧 Processing Features & Bugs</h2>
+        <table>
+            <tr>
+                <th>File Type</th>
+                <th>Processing Features</th>
+                <th>Known Issues</th>
+                <th>Data Exposure</th>
+            </tr>
+            <tr>
+                <td>PDF Documents</td>
+                <td>Text extraction, page count, metadata</td>
+                <td>No corruption handling</td>
+                <td><span class="badge badge-danger">Extracted text visible</span></td>
+            </tr>
+            <tr>
+                <td>CSV Files</td>
+                <td>Row/column analysis, preview</td>
+                <td>No data sanitization</td>
+                <td><span class="badge badge-danger">Sensitive data preview</span></td>
+            </tr>
+            <tr>
+                <td>Images</td>
+                <td>Metadata, dimensions, thumbnails</td>
+                <td>Corrupted files crash processing</td>
+                <td><span class="badge badge-warning">Metadata exposed</span></td>
+            </tr>
+            <tr>
+                <td>All Types</td>
+                <td>File validation, virus scanning</td>
+                <td>No actual file storage</td>
+                <td><span class="badge badge-danger">Processing errors exposed</span></td>
+            </tr>
+        </table>
+    </div>
+
+    <div class="container">
+        <h2>🧩 Multi-Layered Puzzle Chain</h2>
+        
+        <div class="puzzle">
+            <h3>🔍 Puzzle 1: Header Discovery</h3>
+            <p>Find the hint in the API response headers that leads to the next challenge!</p>
+            <p><strong>Hint Location:</strong> <code>X-Hidden-Metadata</code> header</p>
+            <p><strong>What to look for:</strong> <code>check_file_processing_logs_endpoint</code></p>
+        </div>
+        
+        <div class="secret">
+            <h3>📋 Puzzle 2: Processing Logs Access</h3>
+            <p>Discover and access the hidden processing logs endpoint with multiple access methods!</p>
+            <p><strong>Endpoint:</strong> <code>/api/processing-logs</code></p>
+            <p><strong>Access Methods:</strong></p>
+            <ul>
+                <li>JWT Token: Basic access to logs</li>
+                <li>Admin Code: <code>?access=PROC_LOGS_ADMIN_2024</code></li>
+                <li>System Key: <code>X-System-Key: system-processing-key-2024</code></li>
+            </ul>
+            <p><strong>Log Levels:</strong> <code>?level=basic|detailed|full</code></p>
+        </div>
+        
+        <div class="puzzle">
+            <h3>🔐 Puzzle 3: Base64 Decryption</h3>
+            <p>System access to processing logs reveals a Base64 encoded message. Decode it!</p>
+            <p><strong>Encoded Message:</strong> Found in <code>secretHint</code> field</p>
+            <p><strong>Decodes to:</strong> Information about the final archive endpoint</p>
+        </div>
+        
+        <div class="secret">
+            <h3>🏆 Puzzle 4: Archive Master Access</h3>
+            <p>Use the decoded clue to access the ultimate archive system!</p>
+            <p><strong>Endpoint:</strong> <code>/api/archive</code></p>
+            <p><strong>Master Access Methods:</strong></p>
+            <ul>
+                <li>Header: <code>X-Archive-Key: ARCHIVE_MASTER_2024</code></li>
+                <li>Query: <code>?master_key=ARCHIVE_MASTER_2024</code></li>
+            </ul>
+            <p><strong>Reward:</strong> XOR encrypted final secret message + automatic decryption</p>
+        </div>
+        
+        <div class="success">
+            <h3>🎉 Final Achievement: FILE_PROCESSING_MASTER_2024</h3>
+            <p>Master access unlocks the encrypted secret and grants the ultimate achievement!</p>
+            <p><strong>XOR Decryption:</strong> Automatic with master key</p>
+            <p><strong>Achievement Unlocked:</strong> Complete file processing system mastery</p>
+        </div>
+    </div>
+
+    <div class="container">
+        <h2>🚨 Critical Vulnerabilities (Your Targets)</h2>
+        
+        <div class="warning">
+            <h3>🔓 File Security Issues</h3>
+            <ul>
+                <li>No file type validation or restrictions</li>
+                <li>Zero-size files accepted and processed</li>
+                <li>No virus scanning or malware detection</li>
+                <li>Predictable filename generation</li>
+                <li>No file size limits enforced</li>
+                <li>Anonymous uploads allowed</li>
+            </ul>
+        </div>
+        
+        <div class="warning">
+            <h3>📋 Access Control Failures</h3>
+            <ul>
+                <li>Broken file ownership verification</li>
+                <li>Public access flag bypasses security</li>
+                <li>No authentication for file listing</li>
+                <li>Uploader information always exposed</li>
+                <li>Processing results visible to everyone</li>
+            </ul>
+        </div>
+        
+        <div class="warning">
+            <h3>⚠️ Error Handling Problems</h3>
+            <ul>
+                <li>Internal error details exposed in responses</li>
+                <li>Stack traces visible in development</li>
+                <li>Processing errors not properly handled</li>
+                <li>Silent failures in critical operations</li>
+                <li>No retry mechanisms for failed processing</li>
+            </ul>
+        </div>
+        
+        <div class="warning">
+            <h3>📊 Data Exposure Issues</h3>
+            <ul>
+                <li>Extracted text from PDFs visible</li>
+                <li>CSV data preview shows sensitive information</li>
+                <li>Processing server details exposed</li>
+                <li>Internal file paths revealed</li>
+                <li>Encryption keys visible in logs</li>
+            </ul>
+        </div>
+    </div>
+
+    <div class="container">
+        <h2>🔧 Test Commands</h2>
+        
+        <h3>File Upload Testing</h3>
+        <code style="display: block; margin: 10px 0; padding: 10px; background: rgba(0,0,0,0.4);">
+# Test file upload (mock)<br>
+curl -X POST http://localhost:8888/api/upload \<br>
+  -H "Content-Type: multipart/form-data" \<br>
+  -F "file=@test-document.pdf"
+        </code>
+        
+        <h3>Security Testing</h3>
+        <code style="display: block; margin: 10px 0; padding: 10px; background: rgba(0,0,0,0.4);">
+# Test unauthorized file access<br>
+curl http://localhost:8888/api/upload/file-001<br><br>
+# Test public data exposure<br>
+curl "http://localhost:8888/api/upload?public=true"
+        </code>
+        
+        <h3>Processing Logs Access</h3>
+        <code style="display: block; margin: 10px 0; padding: 10px; background: rgba(0,0,0,0.4);">
+# Try admin access<br>
+curl "http://localhost:8888/api/processing-logs?access=PROC_LOGS_ADMIN_2024&level=detailed"<br><br>
+# Try system access<br>
+curl -H "X-System-Key: system-processing-key-2024" \<br>
+     "http://localhost:8888/api/processing-logs?level=full"
+        </code>
+        
+        <h3>Archive System Access</h3>
+        <code style="display: block; margin: 10px 0; padding: 10px; background: rgba(0,0,0,0.4);">
+# Ultimate access test<br>
+curl -H "X-Archive-Key: ARCHIVE_MASTER_2024" \<br>
+     http://localhost:8888/api/archive
+        </code>
+    </div>
+
+    <div class="container">
+        <h2>📋 Your Complete Mission</h2>
+        <p>Check the <code>README.md</code> file for comprehensive details:</p>
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 15px;">
+            <div class="file-card">
+                <h4>🐛 Security Fixes</h4>
+                <p><strong>12+</strong> critical vulnerabilities</p>
+                <p>File validation, access control, data exposure</p>
+            </div>
+            <div class="file-card">
+                <h4>⚡ Missing Features</h4>
+                <p><strong>10+</strong> incomplete features</p>
+                <p>Processing, error handling, storage</p>
+            </div>
+            <div class="file-card">
+                <h4>🧩 Puzzle Chain</h4>
+                <p><strong>4</strong> connected challenges</p>
+                <p>Headers → Logs → Base64 → Archives</p>
+            </div>
+            <div class="file-card">
+                <h4>🏆 Master Achievement</h4>
+                <p><strong>Ultimate</strong> file processing mastery</p>
+                <p>XOR decryption, system access</p>
+            </div>
+        </div>
+        
+        <div class="success">
+            <strong>💡 Pro Tip:</strong> This assessment tests file security, error handling, and system design. The puzzle chain teaches you about multi-layer security and various encoding/encryption techniques!
+        </div>
+    </div>
+</body>
+</html>
