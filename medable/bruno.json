@@ -1,6 +1,6 @@
 {
   "version": "1",
-  "name": "medable",
+  "name": "Medable",
   "type": "collection",
   "ignore": [
     "node_modules",
