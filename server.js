@@ -48,15 +48,18 @@ const limiter = rateLimit({
 });
 
 // ==================== TIMEOUT HANDLING ====================
+const REQUEST_TIMEOUT = parseInt(process.env.REQUEST_TIMEOUT) || 30000;
+const RESPONSE_TIMEOUT = parseInt(process.env.RESPONSE_TIMEOUT) || 30000;
+
 app.use((req, res, next) => {
-    req.setTimeout(30000, () => {
+    req.setTimeout(REQUEST_TIMEOUT, () => {
         const err = new Error('Request Timeout');
         err.status = 408;
         err.code = 'REQUEST_TIMEOUT';
         next(err);
     });
     
-    res.setTimeout(30000, () => {
+    res.setTimeout(RESPONSE_TIMEOUT, () => {
         console.warn(`Response timeout for ${req.method} ${req.url}`);
     });
     
@@ -68,9 +71,11 @@ app.use('/api/upload', limiter);
 
 // ==================== CORS CONFIGURATION ====================
 const corsOptions = {
-  origin: process.env.NODE_ENV === 'development' 
-    ? ['https://*.railway.app', 'https://*.up.railway.app', 'http://localhost:8888'] 
-    : ['http://localhost:3000', 'http://localhost:8888', 'http://127.0.0.1:8888'],
+  origin: process.env.CORS_ORIGINS 
+    ? process.env.CORS_ORIGINS.split(',') 
+    : (process.env.NODE_ENV === 'development' 
+        ? ['https://*.railway.app', 'https://*.up.railway.app', 'http://localhost:8888'] 
+        : ['http://localhost:3000', 'http://localhost:8888', 'http://127.0.0.1:8888']),
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-System-Key', 'X-Archive-Key', 'X-Requested-With'],
   credentials: true,
@@ -164,14 +169,14 @@ app.post("/token", (req, res, next) => {
       });
     }
     
-    const token = jwt.sign(payload, process.env.JWT_SECRET || 'fallback-secret-key-for-assessment-2024', {
-      expiresIn: "11h",
+    const token = jwt.sign(payload, process.env.JWT_SECRET, {
+      expiresIn: process.env.JWT_EXPIRES_IN || "11h",
     });
 
     res.json({
       success: true,
       token,
-      expiresIn: "11h"
+      expiresIn: process.env.JWT_EXPIRES_IN || "11h"
     });
   } catch (error) {
     next(error);
@@ -204,22 +209,26 @@ app.use((req, res, next) => {
 
 // ==================== REQUEST LOGGING ====================
 app.use((req, res, next) => {
-  const start = Date.now();
-  const originalSend = res.send;
-  const originalJson = res.json;
-  
-  res.json = function(body) {
-    const duration = Date.now() - start;
-    console.log(`${req.method} ${req.originalUrl} ${res.statusCode} ${duration}ms`);
-    return originalJson.call(this, body);
-  };
-  
-  res.send = function(body) {
-    const duration = Date.now() - start;
-    console.log(`${req.method} ${req.originalUrl} ${res.statusCode} ${duration}ms`);
-    return originalSend.call(this, body);
-  };
-  
+  if (process.env.LOG_REQUESTS === 'true' || process.env.DEBUG === 'true') {
+    const start = Date.now();
+    const originalSend = res.send;
+    const originalJson = res.json;
+    
+    res.json = function(body) {
+      const duration = Date.now() - start;
+      console.log(`${req.method} ${req.originalUrl} ${res.statusCode} ${duration}ms`);
+      if (process.env.LOG_RESPONSES === 'true' && process.env.NODE_ENV === 'development') {
+        console.log('Response:', JSON.stringify(body, null, 2).substring(0, 500));
+      }
+      return originalJson.call(this, body);
+    };
+    
+    res.send = function(body) {
+      const duration = Date.now() - start;
+      console.log(`${req.method} ${req.originalUrl} ${res.statusCode} ${duration}ms`);
+      return originalSend.call(this, body);
+    };
+  }
   next();
 });
 
@@ -301,7 +310,9 @@ app.use((error, req, res, next) => {
     stack: error.stack || 'No stack trace available'
   };
   
-  console.error('SERVER ERROR:', errorLog);
+  if (process.env.LOG_ERRORS === 'true' || process.env.DEBUG === 'true') {
+    console.error('SERVER ERROR:', errorLog);
+  }
   
   // Determine error type and create safe response
   let statusCode = 500;
@@ -486,7 +497,7 @@ const server = app.listen(PORT, '0.0.0.0', () => {
   console.log(`   • Rate limiting enabled`);
   console.log(`   • CORS properly configured`);
   console.log(`   • File encryption at rest (AES-256-GCM)`);
-  console.log(`   • Timeout handling (30 seconds)`);
+  console.log(`   • Timeout handling (${REQUEST_TIMEOUT/1000} seconds)`);
   console.log(` Multi-layered puzzles available:`);
   console.log(`   1. Header Discovery ✓`);
   console.log(`   2. Processing Logs Access ✓`);
@@ -496,9 +507,9 @@ const server = app.listen(PORT, '0.0.0.0', () => {
   console.log(`   • Batch upload support (5 files)`);
   console.log(`   • Real thumbnail generation`);
   console.log(`   • File versioning & backup`);
-  console.log(`   • Compression (25% average)`);
-  console.log(`   • Retry logic (3 attempts)`);
-  console.log(`   • Storage quotas (100MB/user)`);
+  console.log(`   • Compression (${process.env.USE_ACTUAL_COMPRESSION === 'true' ? 'ACTUAL' : 'simulated'})`);
+  console.log(`   • Retry logic (${process.env.PROCESSING_RETRY_ATTEMPTS || 3} attempts)`);
+  console.log(`   • Storage quotas (${(process.env.MAX_USER_STORAGE || 104857600) / (1024*1024)}MB/user)`);
   console.log(`   • File sharing with expiration`);
   console.log(` Railway Deployment Ready!`);
   console.log(`=========================================`);
