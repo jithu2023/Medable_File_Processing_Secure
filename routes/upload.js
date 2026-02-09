@@ -6,167 +6,19 @@ const fs = require('fs').promises;
 const crypto = require('crypto');
 const multer = require('multer');
 const { fileTypeFromBuffer } = require('file-type');
-const zlib = require('zlib'); // ADDED: For actual compression
-
-// FIXED: Enhanced file type detection with proper PDF validation
-async function getFileType(buffer, originalName) {
-    try {
-        // Get file extension from original name
-        const fileExt = path.extname(originalName).toLowerCase();
-        
-        // Check for empty buffer
-        if (!buffer || buffer.length === 0) {
-            throw new Error('File is empty');
-        }
-        
-        // Try the standard file-type library first
-        if (fileTypeFromBuffer && typeof fileTypeFromBuffer === 'function') {
-            const result = await fileTypeFromBuffer(buffer);
-            if (result) {
-                // Special handling for PDF detection
-                if (result.mime === 'application/pdf') {
-                    // CRITICAL FIX: Check for PDF header first
-                    if (buffer.length >= 5) {
-                        const pdfHeader = buffer.slice(0, 5);
-                        if (pdfHeader.equals(Buffer.from([0x25, 0x50, 0x44, 0x46, 0x2D]))) {
-                            // Valid PDF header found
-                            return result;
-                        }
-                    }
-                    // If file-type says it's PDF but no header, it's suspicious
-                    console.warn('File identified as PDF but missing PDF header');
-                    // Don't throw, be more lenient for interview testing
-                }
-                return result;
-            }
-        }
-        
-        // Check file size
-        if (buffer.length < 4) {
-            throw new Error('File too small');
-        }
-        
-        // Define file signatures (magic bytes)
-        const signatures = {
-            'image/jpeg': { 
-                bytes: [[0xFF, 0xD8, 0xFF, 0xE0], [0xFF, 0xD8, 0xFF, 0xE1], [0xFF, 0xD8, 0xFF, 0xE8], [0xFF, 0xD8, 0xFF, 0xDB]],
-                ext: 'jpg',
-                minSize: 100
-            },
-            'image/png': { 
-                bytes: [[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]],
-                ext: 'png',
-                minSize: 67
-            },
-            'image/gif': { 
-                bytes: [[0x47, 0x49, 0x46, 0x38, 0x37, 0x61], [0x47, 0x49, 0x46, 0x38, 0x39, 0x61]],
-                ext: 'gif',
-                minSize: 35
-            },
-            'application/pdf': { 
-                bytes: [[0x25, 0x50, 0x44, 0x46, 0x2D]],
-                ext: 'pdf',
-                minSize: 100
-            }
-        };
-        
-        // Check for known file signatures
-        for (const [mime, sig] of Object.entries(signatures)) {
-            for (const signature of sig.bytes) {
-                if (buffer.length >= signature.length) {
-                    let match = true;
-                    for (let i = 0; i < signature.length; i++) {
-                        if (buffer[i] !== signature[i]) {
-                            match = false;
-                            break;
-                        }
-                    }
-                    if (match) {
-                        // Check minimum file size
-                        if (sig.minSize && buffer.length < sig.minSize) {
-                            throw new Error(`File too small for ${mime} format`);
-                        }
-                        
-                        // Additional validation for PDF files
-                        if (mime === 'application/pdf') {
-                            const bufferStr = buffer.toString('latin1', 0, Math.min(buffer.length, 1000));
-                            // A valid PDF should have basic structure markers
-                            if (!bufferStr.includes('obj') && !bufferStr.includes('endobj')) {
-                                // CRITICAL FIX: Be more lenient for interview testing
-                                console.warn('PDF structure warning: missing object markers in first 1000 bytes');
-                                // Don't reject, just warn
-                            }
-                        }
-                        
-                        return { mime, ext: sig.ext };
-                    }
-                }
-            }
-        }
-        
-        // If file has .pdf extension but we didn't detect PDF signature
-        if (fileExt === '.pdf') {
-            // Check if it starts with %PDF-
-            const bufferStr = buffer.toString('latin1', 0, Math.min(buffer.length, 1000));
-            if (bufferStr.startsWith('%PDF-')) {
-                // It's a PDF but might have extra bytes at start
-                return { mime: 'application/pdf', ext: 'pdf' };
-            }
-            // Be more lenient for interview - warn but don't reject
-            console.warn('File with .pdf extension does not contain standard PDF header');
-            return { mime: 'application/pdf', ext: 'pdf' }; // Allow it for testing
-        }
-        
-        // For text files, check if content is mostly ASCII
-        if (buffer.length > 0) {
-            const sampleSize = Math.min(buffer.length, 1024);
-            let asciiCount = 0;
-            let nullByteCount = 0;
-            
-            for (let i = 0; i < sampleSize; i++) {
-                const byte = buffer[i];
-                if (byte === 0) nullByteCount++;
-                if (byte <= 127) asciiCount++;
-            }
-            
-            // If file has null bytes, it's likely binary
-            if (nullByteCount > 0) {
-                throw new Error('File contains binary data');
-            }
-            
-            const asciiPercentage = (asciiCount / sampleSize) * 100;
-            
-            if (asciiPercentage > 95) {
-                const bufferStr = buffer.toString('utf8', 0, Math.min(buffer.length, 1024));
-                const lines = bufferStr.split('\n');
-                if (lines.length > 1 && lines[0].includes(',')) {
-                    return { mime: 'text/csv', ext: 'csv' };
-                }
-                return { mime: 'text/plain', ext: 'txt' };
-            }
-        }
-        
-        throw new Error('Unrecognized file format');
-        
-    } catch (error) {
-        if (!error.code) {
-            error.code = 'UNKNOWN_FILE_TYPE';
-        }
-        throw error;
-    }
-}
-
-const { generateThumbnail } = require('./thumbnail');
+const zlib = require('zlib');
 
 const router = express.Router();
 
 // ==================== SECURE CONFIGURATION ====================
 const JWT_SECRET = process.env.JWT_SECRET || crypto.randomBytes(32).toString('hex');
-const MAX_FILE_SIZE = parseInt(process.env.MAX_FILE_SIZE) || 10 * 1024 * 1024; // 10MB default
+const MAX_FILE_SIZE = parseInt(process.env.MAX_FILE_SIZE) || 10 * 1024 * 1024;
 const UPLOAD_DIR = process.env.UPLOAD_DIR || './uploads';
-const MAX_USER_STORAGE = 100 * 1024 * 1024; // 100MB per user
+const MAX_USER_STORAGE = parseInt(process.env.MAX_USER_STORAGE) || 100 * 1024 * 1024;
 const MAX_USER_UPLOADS_PER_HOUR = 20;
-const USE_ACTUAL_COMPRESSION = process.env.USE_ACTUAL_COMPRESSION === 'true'; // ADDED: Config option
+const USE_ACTUAL_COMPRESSION = process.env.USE_ACTUAL_COMPRESSION === 'true';
+const COMPRESSION_THRESHOLD = parseInt(process.env.COMPRESSION_THRESHOLD) || 1024;
+const MIN_COMPRESSION_RATIO = 0.05; // At least 5% reduction required
 
 const ALLOWED_MIME_TYPES = [
     'image/jpeg',
@@ -195,7 +47,7 @@ const SENSITIVE_PATTERNS = {
 };
 
 // ==================== FILE SHARING SYSTEM ====================
-const sharedFiles = new Map(); // shareId -> { fileId, expiresAt, createdBy }
+const sharedFiles = new Map();
 
 // ==================== PROCESSING QUEUE ====================
 const processingQueue = [];
@@ -206,24 +58,20 @@ const MAX_CONCURRENT_PROCESSES = 3;
 const accessLogs = [];
 
 // ==================== SETUP ====================
-// Track user storage and upload rates
 const userStorage = new Map();
 const userUploadRates = new Map();
 
-// Initialize storage for default users
 userStorage.set('user1', 2048576);
 userStorage.set('admin', 1024000);
 userStorage.set('user2', 524288);
 userStorage.set('testuser', 0);
 userStorage.set('system', 0);
 
-// Ensure upload directory exists
 (async () => {
     try {
         await fs.access(UPLOAD_DIR);
     } catch {
         await fs.mkdir(UPLOAD_DIR, { recursive: true });
-        // Create user directories
         const users = ['user1', 'admin', 'user2', 'testuser', 'system'];
         for (const user of users) {
             const userDir = path.join(UPLOAD_DIR, user);
@@ -233,7 +81,6 @@ userStorage.set('system', 0);
     }
 })();
 
-// Ensure thumbnail directory exists
 (async () => {
     const thumbnailDir = path.join(UPLOAD_DIR, 'thumbnails');
     try {
@@ -242,7 +89,6 @@ userStorage.set('system', 0);
         await fs.mkdir(thumbnailDir, { recursive: true });
         console.log(`✅ Created thumbnail directory: ${thumbnailDir}`);
         
-        // Create a default thumbnail SVG
         const defaultThumbnail = `
             <svg width="150" height="150" xmlns="http://www.w3.org/2000/svg">
                 <rect width="150" height="150" fill="#4a90e2"/>
@@ -255,6 +101,280 @@ userStorage.set('system', 0);
         await fs.writeFile(path.join(thumbnailDir, 'simulated.svg'), defaultThumbnail);
     }
 })();
+
+// ==================== SECURE FILE TYPE DETECTION ====================
+async function getFileType(buffer, originalName) {
+    try {
+        const fileExt = path.extname(originalName).toLowerCase();
+        
+        if (!buffer || buffer.length === 0) {
+            throw new Error('File is empty');
+        }
+        
+        if (fileTypeFromBuffer && typeof fileTypeFromBuffer === 'function') {
+            const result = await fileTypeFromBuffer(buffer);
+            if (result) {
+                if (result.mime === 'application/pdf') {
+                    if (buffer.length >= 5) {
+                        const pdfHeader = buffer.slice(0, 5);
+                        if (!pdfHeader.equals(Buffer.from([0x25, 0x50, 0x44, 0x46, 0x2D]))) {
+                            throw new Error('File identified as PDF but missing valid PDF header');
+                        }
+                    }
+                }
+                return result;
+            }
+        }
+        
+        if (buffer.length < 4) {
+            throw new Error('File too small');
+        }
+        
+        const signatures = {
+            'image/jpeg': { 
+                bytes: [[0xFF, 0xD8, 0xFF, 0xE0], [0xFF, 0xD8, 0xFF, 0xE1], [0xFF, 0xD8, 0xFF, 0xE8], [0xFF, 0xD8, 0xFF, 0xDB]],
+                ext: 'jpg',
+                minSize: 100
+            },
+            'image/png': { 
+                bytes: [[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]],
+                ext: 'png',
+                minSize: 67
+            },
+            'image/gif': { 
+                bytes: [[0x47, 0x49, 0x46, 0x38, 0x37, 0x61], [0x47, 0x49, 0x46, 0x38, 0x39, 0x61]],
+                ext: 'gif',
+                minSize: 35
+            },
+            'application/pdf': { 
+                bytes: [[0x25, 0x50, 0x44, 0x46, 0x2D]],
+                ext: 'pdf',
+                minSize: 100
+            }
+        };
+        
+        for (const [mime, sig] of Object.entries(signatures)) {
+            for (const signature of sig.bytes) {
+                if (buffer.length >= signature.length) {
+                    let match = true;
+                    for (let i = 0; i < signature.length; i++) {
+                        if (buffer[i] !== signature[i]) {
+                            match = false;
+                            break;
+                        }
+                    }
+                    if (match) {
+                        if (sig.minSize && buffer.length < sig.minSize) {
+                            throw new Error(`File too small for ${mime} format`);
+                        }
+                        return { mime, ext: sig.ext };
+                    }
+                }
+            }
+        }
+        
+        if (fileExt === '.pdf') {
+            const bufferStr = buffer.toString('latin1', 0, Math.min(buffer.length, 1000));
+            if (bufferStr.startsWith('%PDF-')) {
+                return { mime: 'application/pdf', ext: 'pdf' };
+            }
+            throw new Error('File with .pdf extension does not contain valid PDF data');
+        }
+        
+        if (buffer.length > 0) {
+            const sampleSize = Math.min(buffer.length, 1024);
+            let asciiCount = 0;
+            let nullByteCount = 0;
+            
+            for (let i = 0; i < sampleSize; i++) {
+                const byte = buffer[i];
+                if (byte === 0) nullByteCount++;
+                if (byte <= 127) asciiCount++;
+            }
+            
+            if (nullByteCount > 0) {
+                throw new Error('File contains binary data');
+            }
+            
+            const asciiPercentage = (asciiCount / sampleSize) * 100;
+            
+            if (asciiPercentage > 95) {
+                const bufferStr = buffer.toString('utf8', 0, Math.min(buffer.length, 1024));
+                const lines = bufferStr.split('\n');
+                if (lines.length > 1 && lines[0].includes(',')) {
+                    return { mime: 'text/csv', ext: 'csv' };
+                }
+                return { mime: 'text/plain', ext: 'txt' };
+            }
+        }
+        
+        throw new Error('Unrecognized file format');
+        
+    } catch (error) {
+        if (!error.code) {
+            error.code = 'UNKNOWN_FILE_TYPE';
+        }
+        throw error;
+    }
+}
+
+// ==================== ENHANCED CONTENT VALIDATION ====================
+async function validateFileContent(fileBuffer, mimetype, originalName) {
+    if (fileBuffer.length === 0) {
+        const error = new Error('File is empty');
+        error.code = 'EMPTY_FILE';
+        throw error;
+    }
+    
+    const minSizes = {
+        'image/jpeg': 100,
+        'image/png': 67,
+        'image/gif': 35,
+        'application/pdf': 100,
+        'text/plain': 1,
+        'text/csv': 1
+    };
+    
+    if (minSizes[mimetype] && fileBuffer.length < minSizes[mimetype]) {
+        throw new Error(`File is too small to be a valid ${mimetype.split('/')[1]} file`);
+    }
+    
+    const fileExt = path.extname(originalName).toLowerCase();
+    if (fileExt === '.pdf' && mimetype !== 'application/pdf') {
+        throw new Error('File with .pdf extension does not contain valid PDF data');
+    }
+    
+    // CRITICAL FIX: STRICT PDF VALIDATION
+    if (mimetype === 'application/pdf') {
+        const pdfHeader = fileBuffer.slice(0, 5);
+        if (!pdfHeader.equals(Buffer.from([0x25, 0x50, 0x44, 0x46, 0x2D]))) {
+            throw new Error('Invalid PDF: missing PDF header');
+        }
+        
+        // Check for PDF structure markers - STRICT VALIDATION
+        const pdfString = fileBuffer.toString('latin1', 0, Math.min(fileBuffer.length, 10000));
+        
+        // A valid PDF must have obj and endobj markers
+        if (!pdfString.includes('obj') || !pdfString.includes('endobj')) {
+            throw new Error('Invalid PDF: corrupted or malformed structure');
+        }
+        
+        // Check for excessive null bytes (corruption indicator)
+        const nullByteCount = fileBuffer.slice(0, Math.min(fileBuffer.length, 1000))
+            .filter(byte => byte === 0).length;
+        if (nullByteCount > 100) {
+            throw new Error('PDF contains excessive null bytes - likely corrupted');
+        }
+    }
+    
+    else if (mimetype.startsWith('image/')) {
+        if (fileBuffer.length < 10) {
+            throw new Error('Invalid image file: file too small');
+        }
+        
+        const firstBytes = fileBuffer.slice(0, 4);
+        const allSame = firstBytes.every(byte => byte === firstBytes[0]);
+        if (allSame && firstBytes[0] === 0) {
+            throw new Error('Invalid image file: corrupted header (all zeros)');
+        }
+        
+        if (mimetype === 'image/jpeg') {
+            if (fileBuffer[0] !== 0xFF || fileBuffer[1] !== 0xD8) {
+                throw new Error('Invalid JPEG: incorrect header');
+            }
+        }
+        
+        if (mimetype === 'image/png' && fileBuffer.length >= 12) {
+            const iendMarker = Buffer.from([0x49, 0x45, 0x4E, 0x44]);
+            const fileEnd = fileBuffer.slice(-12, -8);
+            if (!fileEnd.equals(iendMarker)) {
+                throw new Error('Invalid PNG: missing IEND chunk');
+            }
+        }
+    }
+    
+    else if (mimetype === 'text/plain' || mimetype === 'text/csv') {
+        const sample = fileBuffer.slice(0, Math.min(fileBuffer.length, 1024));
+        for (let i = 0; i < sample.length; i++) {
+            if (sample[i] === 0) {
+                throw new Error('Invalid text file: contains null bytes');
+            }
+        }
+    }
+    
+    const last1024 = fileBuffer.slice(-Math.min(1024, fileBuffer.length));
+    const nullCount = last1024.filter(byte => byte === 0).length;
+    if (nullCount > last1024.length * 0.9) {
+        throw new Error('File appears truncated or corrupted');
+    }
+    
+    return true;
+}
+
+// ==================== FIXED COMPRESSION LOGIC ====================
+async function applyCompression(buffer, mimetype, fileId) {
+    // Don't compress images or already compressed formats
+    if (mimetype.startsWith('image/') || 
+        mimetype.includes('zip') || 
+        mimetype.includes('compressed')) {
+        return {
+            buffer,
+            compressed: false,
+            ratio: '0%',
+            algorithm: 'none',
+            reason: 'already compressed format'
+        };
+    }
+    
+    // Don't compress small files
+    if (buffer.length < COMPRESSION_THRESHOLD) {
+        return {
+            buffer,
+            compressed: false,
+            ratio: '0%',
+            algorithm: 'none',
+            reason: `file too small (${buffer.length} bytes)`
+        };
+    }
+    
+    try {
+        const compressedBuffer = zlib.gzipSync(buffer, { level: 6 });
+        const compressionRatio = (buffer.length - compressedBuffer.length) / buffer.length;
+        
+        // CRITICAL FIX: Only use compression if it actually helps
+        if (compressionRatio < MIN_COMPRESSION_RATIO) {
+            console.log(`[${fileId}] Compression skipped: only ${(compressionRatio * 100).toFixed(1)}% reduction`);
+            return {
+                buffer,
+                compressed: false,
+                ratio: '0%',
+                algorithm: 'none',
+                reason: `insufficient compression (${(compressionRatio * 100).toFixed(1)}%)`
+            };
+        }
+        
+        console.log(`[${fileId}] Compression applied: ${(compressionRatio * 100).toFixed(1)}% reduction`);
+        
+        return {
+            buffer: compressedBuffer,
+            compressed: true,
+            ratio: `${(compressionRatio * 100).toFixed(1)}%`,
+            algorithm: 'gzip',
+            originalSize: buffer.length,
+            compressedSize: compressedBuffer.length
+        };
+        
+    } catch (error) {
+        console.warn(`[${fileId}] Compression failed:`, error.message);
+        return {
+            buffer,
+            compressed: false,
+            ratio: '0%',
+            algorithm: 'none',
+            reason: `compression error: ${error.message}`
+        };
+    }
+}
 
 // ==================== QUEUE PROCESSOR ====================
 async function processQueueItem() {
@@ -271,7 +391,6 @@ async function processQueueItem() {
         console.error(`Error processing queue item ${fileId}:`, error.message);
     } finally {
         activeProcesses--;
-        // Process next item in queue
         setTimeout(processQueueItem, 100);
     }
 }
@@ -298,10 +417,8 @@ const storage = multer.diskStorage({
             .digest('hex')
             .substring(0, 32);
         
-        // Get extension from original filename or MIME type
         let fileExt = path.extname(file.originalname).toLowerCase();
         if (!fileExt) {
-            // Fallback to common extensions based on MIME type
             const mimeToExt = {
                 'image/jpeg': '.jpg',
                 'image/png': '.png',
@@ -325,14 +442,12 @@ const storage = multer.diskStorage({
 // ==================== ENHANCED FILE VALIDATION ====================
 const fileFilter = async (req, file, cb) => {
     try {
-        // Check MIME type
         if (!ALLOWED_MIME_TYPES.includes(file.mimetype)) {
             const error = new Error(`File type ${file.mimetype} is not allowed`);
             error.code = 'INVALID_FILE_TYPE';
             return cb(error, false);
         }
         
-        // Check file extension
         const allowedExtensions = [
             '.jpg', '.jpeg', '.png', '.gif', '.pdf', 
             '.txt', '.csv', '.doc', '.docx', '.xls', '.xlsx'
@@ -345,14 +460,12 @@ const fileFilter = async (req, file, cb) => {
             return cb(error, false);
         }
         
-        // Check for zero-size files
         if (req.headers['content-length'] === '0') {
             const error = new Error('Zero-size file uploaded');
             error.code = 'ZERO_SIZE_FILE';
             return cb(error, false);
         }
         
-        // Rate limiting per user
         const userId = req.user?.userId || 'anonymous';
         const now = Date.now();
         const userRate = userUploadRates.get(userId) || { count: 0, resetTime: now + 3600000 };
@@ -379,7 +492,6 @@ const fileFilter = async (req, file, cb) => {
     }
 };
 
-// ==================== MULTER CONFIGURATION ====================
 const upload = multer({
     storage: storage,
     fileFilter: fileFilter,
@@ -391,7 +503,6 @@ const upload = multer({
     }
 });
 
-// ==================== BATCH UPLOAD CONFIGURATION ====================
 const batchUpload = multer({
     storage: storage,
     fileFilter: fileFilter,
@@ -493,8 +604,6 @@ let uploadedFiles = [
 ];
 
 // ==================== ENHANCED MIDDLEWARE ====================
-
-// Authentication middleware
 function authenticate(req, res, next) {
     const authHeader = req.get('authorization');
     
@@ -542,7 +651,6 @@ function authenticate(req, res, next) {
     }
 }
 
-// Authorization middleware for file access
 function authorizeFileAccess(req, res, next) {
     const fileId = req.params.fileId;
     const file = uploadedFiles.find(f => f.id === fileId);
@@ -571,7 +679,6 @@ function authorizeFileAccess(req, res, next) {
     next();
 }
 
-// Storage quota middleware
 function checkStorageQuota(req, res, next) {
     const userId = req.user.userId;
     const fileSize = parseInt(req.headers['content-length']) || 0;
@@ -592,8 +699,6 @@ function checkStorageQuota(req, res, next) {
 }
 
 // ==================== UTILITY FUNCTIONS ====================
-
-// Enhanced sanitization for sensitive data
 function sanitizeText(text) {
     if (!text || typeof text !== 'string') return text;
     
@@ -605,7 +710,6 @@ function sanitizeText(text) {
     return sanitized;
 }
 
-// Sanitize file response based on user role
 function sanitizeFile(file, user) {
     const isOwner = file.uploadedBy === user.userId;
     const isAdmin = user.role === 'admin';
@@ -623,12 +727,10 @@ function sanitizeFile(file, user) {
         processingResult: file.processingResult
     };
     
-    // Only expose uploader to owner/admin
     if (isOwner || isAdmin) {
         response.uploadedBy = file.uploadedBy;
     }
     
-    // Expose advanced features to owner/admin
     if (isOwner || isAdmin) {
         response.compression = file.compression;
         response.encryption = file.encryption;
@@ -637,7 +739,6 @@ function sanitizeFile(file, user) {
         response.backup = file.backup;
     }
     
-    // Sanitize processing result for non-owners/admins
     if (!isOwner && !isAdmin) {
         if (response.processingResult && response.processingResult.hasSensitiveData) {
             response.processingResult = {
@@ -650,149 +751,10 @@ function sanitizeFile(file, user) {
     return response;
 }
 
-// Async error handler wrapper
 function asyncHandler(fn) {
     return (req, res, next) => {
         Promise.resolve(fn(req, res, next)).catch(next);
     };
-}
-
-// ==================== FIXED: ENHANCED CONTENT VALIDATION ====================
-async function validateFileContent(fileBuffer, mimetype, originalName) {
-    // Check file size
-    if (fileBuffer.length === 0) {
-        const error = new Error('File is empty');
-        error.code = 'EMPTY_FILE';
-        throw error;
-    }
-    
-    // Check for minimum sizes based on file type
-    const minSizes = {
-        'image/jpeg': 100,
-        'image/png': 67,
-        'image/gif': 35,
-        'application/pdf': 100,
-        'text/plain': 1,
-        'text/csv': 1
-    };
-    
-    if (minSizes[mimetype] && fileBuffer.length < minSizes[mimetype]) {
-        const error = new Error(`File is too small to be a valid ${mimetype.split('/')[1]} file`);
-        error.code = 'INVALID_FILE_CONTENT';
-        throw error;
-    }
-    
-    // CRITICAL FIX: Check for extension vs MIME type mismatch
-    const fileExt = path.extname(originalName).toLowerCase();
-    if (fileExt === '.pdf' && mimetype !== 'application/pdf') {
-        console.warn('File with .pdf extension does not contain standard PDF data');
-        // Don't throw for interview testing
-    }
-    
-    // Validate based on MIME type
-    if (mimetype.startsWith('image/')) {
-        // Basic image validation
-        if (fileBuffer.length < 10) {
-            const error = new Error('Invalid image file: file too small');
-            error.code = 'INVALID_FILE_CONTENT';
-            throw error;
-        }
-        
-        // Check for common image corruption patterns
-        const firstBytes = fileBuffer.slice(0, 4);
-        
-        // Check for all zeros or all same bytes
-        const allSame = firstBytes.every(byte => byte === firstBytes[0]);
-        if (allSame && firstBytes[0] === 0) {
-            const error = new Error('Invalid image file: corrupted header (all zeros)');
-            error.code = 'INVALID_FILE_CONTENT';
-            throw error;
-        }
-        
-        // For JPEG, check for proper structure
-        if (mimetype === 'image/jpeg') {
-            // JPEG should start with FF D8
-            if (fileBuffer[0] !== 0xFF || fileBuffer[1] !== 0xD8) {
-                const error = new Error('Invalid JPEG: incorrect header');
-                error.code = 'INVALID_FILE_CONTENT';
-                throw error;
-            }
-        }
-        
-        // For PNG, check for IEND chunk at the end
-        if (mimetype === 'image/png' && fileBuffer.length >= 12) {
-            const iendMarker = Buffer.from([0x49, 0x45, 0x4E, 0x44]);
-            const fileEnd = fileBuffer.slice(-12, -8);
-            if (!fileEnd.equals(iendMarker)) {
-                const error = new Error('Invalid PNG: missing IEND chunk');
-                error.code = 'INVALID_FILE_CONTENT';
-                throw error;
-            }
-        }
-    }
-    
-    else if (mimetype === 'application/pdf') {
-        // CRITICAL FIX: Improved PDF validation - less strict for interview
-        const pdfHeader = fileBuffer.slice(0, 5);
-        if (!pdfHeader.equals(Buffer.from([0x25, 0x50, 0x44, 0x46, 0x2D]))) {
-            // Check if it starts with any PDF-like content
-            const pdfString = fileBuffer.toString('latin1', 0, Math.min(fileBuffer.length, 20));
-            if (!pdfString.includes('%PDF')) {
-                const error = new Error('Invalid PDF: missing PDF header');
-                error.code = 'INVALID_FILE_CONTENT';
-                throw error;
-            }
-            console.warn('PDF warning: non-standard header but contains PDF-like content');
-        }
-        
-        // Check for PDF structure markers - be lenient for interview
-        const pdfString = fileBuffer.toString('latin1', 0, Math.min(fileBuffer.length, 10000));
-        
-        // A valid PDF should have obj or endobj markers
-        if (!pdfString.includes('obj') && !pdfString.includes('endobj')) {
-            console.warn('PDF structure warning: missing object markers');
-            // Don't throw error for interview testing
-        }
-        
-        // Check for common corruption patterns
-        if (pdfString.includes('\x00\x00\x00\x00\x00\x00\x00')) {
-            console.warn('PDF contains null byte sequences - may be corrupted');
-        }
-    }
-    
-    else if (mimetype === 'text/plain' || mimetype === 'text/csv') {
-        // Text file validation
-        const sample = fileBuffer.slice(0, Math.min(fileBuffer.length, 1024));
-        let invalidCharCount = 0;
-        
-        for (let i = 0; i < sample.length; i++) {
-            const byte = sample[i];
-            // Check for null bytes in text files
-            if (byte === 0) {
-                const error = new Error('Invalid text file: contains null bytes');
-                error.code = 'INVALID_FILE_CONTENT';
-                throw error;
-            }
-        }
-        
-        // If more than 30% non-ASCII, likely not a text file (more lenient)
-        if ((invalidCharCount / sample.length) > 0.3) {
-            const error = new Error(`Invalid ${mimetype.split('/')[1]} file: contains too many non-text characters`);
-            error.code = 'INVALID_FILE_CONTENT';
-            throw error;
-        }
-    }
-    
-    // Check for file truncation
-    const last1024 = fileBuffer.slice(-Math.min(1024, fileBuffer.length));
-    const nullCount = last1024.filter(byte => byte === 0).length;
-    if (nullCount > last1024.length * 0.9) { // 90% null bytes at end
-        const error = new Error('File appears truncated or corrupted');
-        error.code = 'INVALID_FILE_CONTENT';
-        throw error;
-    }
-    
-    return true;
 }
 
 // ==================== ENHANCED PROCESSING WITH RETRY LOGIC ====================
@@ -803,7 +765,6 @@ async function processFileWithRetry(fileId, retryCount = 0) {
     try {
         file.status = 'processing';
         
-        // Log access
         accessLogs.push({
             timestamp: new Date().toISOString(),
             userId: file.uploadedBy,
@@ -812,13 +773,10 @@ async function processFileWithRetry(fileId, retryCount = 0) {
             details: { retryCount }
         });
         
-        // Simulate random failures for retry testing (10% chance)
         if (Math.random() < 0.1 && retryCount < PROCESSING_RETRY_ATTEMPTS) {
             throw new Error(`Simulated processing failure (attempt ${retryCount + 1})`);
         }
         
-        // PRODUCTION READY: Virus scanning simulation with realistic patterns
-        // In production, this would integrate with ClamAV or similar
         if (Math.random() > 0.9) {
             file.status = 'quarantined';
             file.processingResult = { 
@@ -829,13 +787,11 @@ async function processFileWithRetry(fileId, retryCount = 0) {
                     scannedAt: new Date().toISOString(),
                     scanner: 'ClamAV-1.0',
                     threatsDetected: ['Trojan.Generic'],
-                    // PRODUCTION NOTE: Actual integration would call ClamAV daemon
                     action: 'quarantined',
                     quarantineId: uuidv4()
                 }
             };
             
-            // Log quarantine
             accessLogs.push({
                 timestamp: new Date().toISOString(),
                 userId: file.uploadedBy,
@@ -847,14 +803,45 @@ async function processFileWithRetry(fileId, retryCount = 0) {
             return;
         }
         
-        // Simulate processing based on file type
+        // CRITICAL FIX: Validate file integrity during processing
+        if (file.mimetype === 'application/pdf') {
+            try {
+                const filePath = path.join(UPLOAD_DIR, file.uploadedBy, file.filename);
+                const encryptedData = await fs.readFile(filePath);
+                
+                const iv = encryptedData.slice(0, 16);
+                const encryptedContent = encryptedData.slice(16, -16);
+                const authTag = encryptedData.slice(-16);
+                
+                const encryptionKey = crypto.scryptSync(JWT_SECRET, 'salt', 32);
+                const decipher = crypto.createDecipheriv('aes-256-gcm', encryptionKey, iv);
+                decipher.setAuthTag(authTag);
+                
+                const decrypted = Buffer.concat([
+                    decipher.update(encryptedContent),
+                    decipher.final()
+                ]);
+                
+                // Validate during processing
+                await validateFileContent(decrypted, file.mimetype, file.originalName);
+                
+            } catch (validationError) {
+                file.status = 'corrupted';
+                file.processingResult = { 
+                    error: 'Corruption detected during processing',
+                    message: 'File integrity check failed during processing',
+                    code: 'PROCESSING_CORRUPTION',
+                    details: validationError.message
+                };
+                return;
+            }
+        }
+        
         if (file.mimetype.startsWith('image/')) {
-            // Thumbnail generation
             try {
                 const thumbnailDir = path.join(UPLOAD_DIR, 'thumbnails');
                 await fs.mkdir(thumbnailDir, { recursive: true });
                 
-                // For testing, create a simulated thumbnail
                 const thumbnailName = `${file.filename.split('.')[0]}_thumb.svg`;
                 const thumbnailPath = path.join(thumbnailDir, thumbnailName);
                 
@@ -877,7 +864,6 @@ async function processFileWithRetry(fileId, retryCount = 0) {
                     thumbnailUrl: `/uploads/thumbnails/${thumbnailName}`,
                     thumbnailDimensions: '150x150',
                     hasSensitiveData: false,
-                    // PRODUCTION NOTE: Actual image processing would use sharp/gm library
                     processingType: 'simulated_thumbnail'
                 };
             } catch (thumbnailError) {
@@ -899,10 +885,10 @@ async function processFileWithRetry(fileId, retryCount = 0) {
                 hasSensitiveData: true,
                 sensitiveFieldsRedacted: ['name', 'email', 'salary'],
                 compression: file.compression,
-                // PRODUCTION NOTE: Actual CSV parsing would use csv-parser or similar
                 processingType: 'simulated_csv_analysis'
             };
         } else if (file.mimetype === 'application/pdf') {
+            // Only simulate processing if validation passed
             file.processingResult = {
                 pages: Math.floor(Math.random() * 50) + 1,
                 textExtracted: true,
@@ -910,7 +896,7 @@ async function processFileWithRetry(fileId, retryCount = 0) {
                 hasSensitiveData: false,
                 compression: file.compression,
                 encryption: file.encryption,
-                // PRODUCTION NOTE: Actual PDF processing would use pdf-parse or similar
+                integrity: 'verified', // Only if validation passed
                 processingType: 'simulated_pdf_analysis'
             };
         } else {
@@ -925,7 +911,6 @@ async function processFileWithRetry(fileId, retryCount = 0) {
         
         file.status = 'processed';
         
-        // Log successful processing
         accessLogs.push({
             timestamp: new Date().toISOString(),
             userId: file.uploadedBy,
@@ -937,7 +922,6 @@ async function processFileWithRetry(fileId, retryCount = 0) {
     } catch (error) {
         if (retryCount < PROCESSING_RETRY_ATTEMPTS) {
             console.log(`🔄 Retrying file ${fileId} (attempt ${retryCount + 1}/${PROCESSING_RETRY_ATTEMPTS})`);
-            // Add back to queue with incremented retry count
             processingQueue.push({ fileId, retryCount: retryCount + 1 });
         } else {
             file.status = 'error';
@@ -948,7 +932,6 @@ async function processFileWithRetry(fileId, retryCount = 0) {
                 lastError: error.message
             };
             
-            // Log failure
             accessLogs.push({
                 timestamp: new Date().toISOString(),
                 userId: file.uploadedBy,
@@ -960,15 +943,12 @@ async function processFileWithRetry(fileId, retryCount = 0) {
     }
 }
 
-// Keep original processFile for backward compatibility
 function processFile(fileId) {
     processingQueue.push({ fileId, retryCount: 0 });
     processQueueItem();
 }
 
 // ==================== FIXED ROUTES ====================
-
-// Apply authentication to all routes
 router.use(authenticate);
 
 // ==================== QUOTA ENDPOINT ====================
@@ -988,7 +968,6 @@ router.get('/quota', asyncHandler(async (req, res) => {
     });
 }));
 
-// Get user files with proper pagination and security
 router.get('/', asyncHandler(async (req, res) => {
     const page = parseInt(req.query.page) || 1;
     const limit = Math.min(parseInt(req.query.limit) || 20, 100);
@@ -996,17 +975,12 @@ router.get('/', asyncHandler(async (req, res) => {
     const fileType = req.query.type;
     
     let filteredFiles = uploadedFiles.filter(file => {
-        // Admins see all files
         if (req.user.role === 'admin') return true;
-        
-        // Regular users see their own files and public files
         const isOwner = file.uploadedBy === req.user.userId;
         const isPublic = file.publicAccess === true;
-        
         return isOwner || isPublic;
     });
     
-    // Apply filters
     if (status) {
         filteredFiles = filteredFiles.filter(file => file.status === status);
     }
@@ -1015,18 +989,14 @@ router.get('/', asyncHandler(async (req, res) => {
         filteredFiles = filteredFiles.filter(file => file.mimetype.includes(fileType));
     }
     
-    // Proper pagination
     const totalFiles = filteredFiles.length;
     const totalPages = Math.ceil(totalFiles / limit);
     const startIndex = (page - 1) * limit;
     const endIndex = Math.min(startIndex + limit, totalFiles);
     
     const paginatedFiles = filteredFiles.slice(startIndex, endIndex);
-    
-    // Sanitize files for response
     const sanitizedFiles = paginatedFiles.map(file => sanitizeFile(file, req.user));
     
-    // Set headers for puzzle chain
     res.set({
         'X-Total-Files': totalFiles.toString(),
         'X-Total-Pages': totalPages.toString(),
@@ -1047,7 +1017,6 @@ router.get('/', asyncHandler(async (req, res) => {
     });
 }));
 
-// Get specific file information with proper security
 router.get('/:fileId', authorizeFileAccess, asyncHandler(async (req, res) => {
     res.set({
         'X-Hidden-Metadata': 'check_file_processing_logs_endpoint'
@@ -1061,10 +1030,8 @@ router.get('/download/:userId/:filename', asyncHandler(async (req, res) => {
     const filePath = path.join(UPLOAD_DIR, userId, filename);
     
     try {
-        // Check if file exists
         await fs.access(filePath);
         
-        // Find file metadata
         const fileMeta = uploadedFiles.find(f => 
             f.filename === filename && f.uploadedBy === userId
         );
@@ -1076,7 +1043,6 @@ router.get('/download/:userId/:filename', asyncHandler(async (req, res) => {
             });
         }
         
-        // Check permissions
         const isOwner = fileMeta.uploadedBy === req.user.userId;
         const isAdmin = req.user.role === 'admin';
         const isPublic = fileMeta.publicAccess === true;
@@ -1089,10 +1055,7 @@ router.get('/download/:userId/:filename', asyncHandler(async (req, res) => {
             });
         }
         
-        // Read the encrypted file
         const encryptedData = await fs.readFile(filePath);
-        
-        // Decrypt the file
         const iv = encryptedData.slice(0, 16);
         const encryptedContent = encryptedData.slice(16, -16);
         const authTag = encryptedData.slice(-16);
@@ -1106,7 +1069,6 @@ router.get('/download/:userId/:filename', asyncHandler(async (req, res) => {
             decipher.final()
         ]);
         
-        // Set headers for download
         res.set({
             'Content-Type': fileMeta.mimetype,
             'Content-Disposition': `attachment; filename="${fileMeta.originalName}"`,
@@ -1116,10 +1078,8 @@ router.get('/download/:userId/:filename', asyncHandler(async (req, res) => {
             'Cache-Control': 'private, max-age=3600'
         });
         
-        // Send the decrypted file
         res.send(decrypted);
         
-        // Log access
         accessLogs.push({
             timestamp: new Date().toISOString(),
             userId: req.user.userId,
@@ -1137,7 +1097,6 @@ router.get('/download/:userId/:filename', asyncHandler(async (req, res) => {
             });
         }
         
-        // Handle decryption errors
         if (error.message.includes('Unsupported state') || error.message.includes('decryption')) {
             return res.status(500).json({
                 error: 'File decryption failed',
@@ -1163,10 +1122,8 @@ router.post('/', checkStorageQuota, upload.single('file'), asyncHandler(async (r
     let fileBuffer;
     
     try {
-        // Read file for validation
         fileBuffer = await fs.readFile(req.file.path);
         
-        // Enhanced validation
         if (fileBuffer.length === 0) {
             await fs.unlink(req.file.path);
             return res.status(400).json({ 
@@ -1176,36 +1133,27 @@ router.post('/', checkStorageQuota, upload.single('file'), asyncHandler(async (r
             });
         }
         
-        // Validate file type by content - with enhanced detection
         let fileType;
         try {
             fileType = await getFileType(fileBuffer, req.file.originalname);
         } catch (typeError) {
             await fs.unlink(req.file.path);
             
-            // Handle corrupted PDFs specifically
             if (typeError.message.includes('Invalid PDF') || 
                 typeError.message.includes('PDF structure') ||
                 typeError.message.includes('.pdf extension')) {
-                // Be more lenient for interview testing
-                console.warn('PDF validation warning:', typeError.message);
-                // Allow PDF files for testing
-                if (req.file.originalname.toLowerCase().endsWith('.pdf')) {
-                    fileType = { mime: 'application/pdf', ext: 'pdf' };
-                } else {
-                    return res.status(400).json({ 
-                        error: 'Corrupted PDF file',
-                        message: typeError.message,
-                        code: 'CORRUPTED_FILE'
-                    });
-                }
-            } else {
                 return res.status(400).json({ 
-                    error: 'Unrecognized or corrupted file',
-                    message: typeError.message || 'Could not determine file type from content',
-                    code: typeError.code || 'UNKNOWN_FILE_TYPE'
+                    error: 'Corrupted PDF file',
+                    message: typeError.message,
+                    code: 'CORRUPTED_FILE'
                 });
             }
+            
+            return res.status(400).json({ 
+                error: 'Unrecognized or corrupted file',
+                message: typeError.message || 'Could not determine file type from content',
+                code: typeError.code || 'UNKNOWN_FILE_TYPE'
+            });
         }
         
         if (!fileType) {
@@ -1217,7 +1165,6 @@ router.post('/', checkStorageQuota, upload.single('file'), asyncHandler(async (r
             });
         }
         
-        // Verify MIME type matches content
         if (!ALLOWED_MIME_TYPES.includes(fileType.mime)) {
             await fs.unlink(req.file.path);
             return res.status(400).json({ 
@@ -1227,41 +1174,36 @@ router.post('/', checkStorageQuota, upload.single('file'), asyncHandler(async (r
             });
         }
         
-        // Enhanced file content validation
+        // CRITICAL FIX: STRICT VALIDATION
         try {
             await validateFileContent(fileBuffer, fileType.mime, req.file.originalname);
         } catch (validationError) {
             await fs.unlink(req.file.path);
             
-            // Handle specific corruption errors
             if (validationError.message.includes('corrupted') || 
                 validationError.message.includes('truncated') ||
                 validationError.message.includes('Invalid PDF') ||
                 validationError.message.includes('.pdf extension')) {
-                // Be more lenient for interview testing with PDFs
-                if (req.file.originalname.toLowerCase().endsWith('.pdf')) {
-                    console.warn('Allowing potentially corrupted PDF for testing:', validationError.message);
-                    // Continue processing
-                } else {
-                    return res.status(400).json({ 
-                        error: 'Corrupted file',
-                        message: validationError.message,
-                        code: 'CORRUPTED_FILE'
-                    });
-                }
-            } else {
+                console.warn(`Corrupted file rejected: ${req.file.originalname} - ${validationError.message}`);
+                
                 return res.status(400).json({ 
-                    error: 'File validation failed',
-                    message: validationError.message,
-                    code: validationError.code || 'FILE_VALIDATION_FAILED'
+                    error: 'Corrupted or malformed file',
+                    message: 'The file appears to be corrupted or malformed and cannot be processed',
+                    code: 'CORRUPTED_FILE',
+                    details: validationError.message
                 });
             }
+            
+            return res.status(400).json({ 
+                error: 'File validation failed',
+                message: validationError.message,
+                code: validationError.code || 'FILE_VALIDATION_FAILED'
+            });
         }
         
-        // Calculate file hash for integrity
         const fileHash = crypto.createHash('sha256').update(fileBuffer).digest('hex');
+        const fileId = uuidv4();
         
-        // Check for duplicate files by hash
         const duplicateFile = uploadedFiles.find(f => 
             f.fileHash === fileHash && f.uploadedBy === req.user.userId
         );
@@ -1275,60 +1217,42 @@ router.post('/', checkStorageQuota, upload.single('file'), asyncHandler(async (r
             });
         }
         
-        // Encryption at rest
+        // FIXED COMPRESSION: Apply before encryption for text files
+        let preEncryptionBuffer = fileBuffer;
+        let compressionResult = { compressed: false, ratio: '0%', algorithm: 'none' };
+        
+        if (USE_ACTUAL_COMPRESSION && 
+            (fileType.mime === 'text/plain' || 
+             fileType.mime === 'text/csv' ||
+             fileType.mime === 'application/pdf')) {
+            
+            compressionResult = await applyCompression(fileBuffer, fileType.mime, fileId);
+            if (compressionResult.compressed) {
+                preEncryptionBuffer = compressionResult.buffer;
+            }
+        }
+        
         const encryptionKey = crypto.scryptSync(JWT_SECRET, 'salt', 32);
         const iv = crypto.randomBytes(16);
         const cipher = crypto.createCipheriv('aes-256-gcm', encryptionKey, iv);
         
         const encryptedBuffer = Buffer.concat([
-            cipher.update(fileBuffer),
+            cipher.update(preEncryptionBuffer),
             cipher.final(),
             cipher.getAuthTag()
         ]);
         
-        // ACTUAL COMPRESSION (if enabled) - ADDED
-        let finalBufferToSave;
-        let compressedSize;
-        let compressionRatio;
-        let compressionAlgorithm = 'none';
+        await fs.writeFile(req.file.path, Buffer.concat([iv, encryptedBuffer]));
         
-        if (USE_ACTUAL_COMPRESSION && fileType.mime !== 'image/jpeg' && fileType.mime !== 'image/png') {
-            // Apply actual compression for non-images
-            try {
-                const compressedBuffer = zlib.gzipSync(encryptedBuffer, { level: 6 });
-                compressedSize = compressedBuffer.length;
-                compressionRatio = ((encryptedBuffer.length - compressedSize) / encryptedBuffer.length * 100).toFixed(1);
-                finalBufferToSave = Buffer.concat([iv, compressedBuffer]);
-                compressionAlgorithm = 'gzip';
-                console.log(`Actual compression applied: ${compressionRatio}% reduction`);
-            } catch (compressionError) {
-                console.warn('Compression failed, falling back to uncompressed:', compressionError.message);
-                finalBufferToSave = Buffer.concat([iv, encryptedBuffer]);
-                compressedSize = encryptedBuffer.length;
-                compressionRatio = '0%';
-            }
-        } else {
-            // No compression or simulated compression for images
-            finalBufferToSave = Buffer.concat([iv, encryptedBuffer]);
-            compressedSize = encryptedBuffer.length;
-            compressionRatio = fileType.mime.startsWith('image/') ? '0% (images already compressed)' : '0%';
-        }
-        
-        // Save encrypted (and optionally compressed) file
-        await fs.writeFile(req.file.path, finalBufferToSave);
-        
-        // Original size before encryption
         const originalSize = fileBuffer.length;
         
-        // Backup simulation
         const backupDir = path.join(UPLOAD_DIR, 'backups', req.user.userId);
         await fs.mkdir(backupDir, { recursive: true });
         const backupPath = path.join(backupDir, `${req.file.filename}_${Date.now()}`);
         await fs.copyFile(req.file.path, backupPath);
         
-        // Create file record with ACTUAL compression data
         const newFile = {
-            id: uuidv4(),
+            id: fileId,
             originalName: req.file.originalname,
             filename: req.file.filename,
             mimetype: fileType.mime,
@@ -1341,12 +1265,12 @@ router.post('/', checkStorageQuota, upload.single('file'), asyncHandler(async (r
             publicAccess: req.body.publicAccess === 'true' || false,
             fileHash: fileHash,
             compression: {
-                enabled: USE_ACTUAL_COMPRESSION,
+                enabled: compressionResult.compressed,
                 originalSize: originalSize,
-                compressedSize: compressedSize,
-                ratio: compressionRatio + '%',
-                algorithm: compressionAlgorithm,
-                note: USE_ACTUAL_COMPRESSION ? 'actual_gzip_compression' : 'simulated_compression'
+                compressedSize: preEncryptionBuffer.length,
+                ratio: compressionResult.ratio,
+                algorithm: compressionResult.algorithm,
+                note: compressionResult.compressed ? 'actual_gzip_compression' : 'compression_not_applied'
             },
             encryption: {
                 algorithm: 'aes-256-gcm',
@@ -1370,11 +1294,9 @@ router.post('/', checkStorageQuota, upload.single('file'), asyncHandler(async (r
         
         uploadedFiles.push(newFile);
         
-        // Update user storage
         const currentUsage = userStorage.get(req.user.userId) || 0;
         userStorage.set(req.user.userId, currentUsage + req.file.size);
         
-        // Start processing with queue system
         processFile(newFile.id);
         
         res.set({
@@ -1386,18 +1308,21 @@ router.post('/', checkStorageQuota, upload.single('file'), asyncHandler(async (r
         res.status(201).json({
             message: 'File uploaded successfully',
             file: sanitizeFile(newFile, req.user),
+            validation: {
+                passed: true,
+                integrity: 'verified',
+                corruption_check: 'passed'
+            },
             features: {
                 encryption: 'aes-256-gcm',
-                compression: compressionAlgorithm !== 'none' ? compressionRatio + '%' : 'simulated',
-                compressionType: compressionAlgorithm,
+                compression: compressionResult.compressed ? compressionResult.ratio : 'not_applied',
+                compressionType: compressionResult.algorithm,
                 versioning: 'enabled',
-                backup: 'created',
-                note: USE_ACTUAL_COMPRESSION ? 'actual_compression_enabled' : 'simulated_compression_shown'
+                backup: 'created'
             }
         });
         
     } catch (error) {
-        // Clean up on error
         if (req.file && req.file.path) {
             try {
                 await fs.unlink(req.file.path);
@@ -1406,17 +1331,15 @@ router.post('/', checkStorageQuota, upload.single('file'), asyncHandler(async (r
             }
         }
         
-        // Return validation errors properly
         if (error.code && [
             'INVALID_FILE_TYPE',
             'INVALID_FILE_EXTENSION',
             'FILE_TOO_LARGE',
             'ZERO_SIZE_FILE',
             'UNKNOWN_FILE_TYPE',
-            'INVALID_FILE_CONTENT',
+            'CORRUPTED_FILE',
             'DUPLICATE_FILE',
-            'EMPTY_FILE',
-            'CORRUPTED_FILE'
+            'EMPTY_FILE'
         ].includes(error.code)) {
             return res.status(400).json({
                 error: 'File validation failed',
@@ -1425,7 +1348,6 @@ router.post('/', checkStorageQuota, upload.single('file'), asyncHandler(async (r
             });
         }
         
-        // Generic error response for unexpected errors
         console.error('Upload error:', error);
         res.status(500).json({ 
             error: 'Upload failed',
@@ -1464,7 +1386,6 @@ router.post('/batch', checkStorageQuota, batchUpload.array('files', 5), asyncHan
                 continue;
             }
             
-            // Validate file content for corruption
             try {
                 await validateFileContent(fileBuffer, fileType.mime, file.originalname);
             } catch (validationError) {
@@ -1478,12 +1399,26 @@ router.post('/batch', checkStorageQuota, batchUpload.array('files', 5), asyncHan
                 continue;
             }
             
-            // Simple encryption for batch
+            // Apply compression before encryption for batch
+            let preEncryptionBuffer = fileBuffer;
+            let compressionResult = { compressed: false, ratio: '0%' };
+            
+            if (USE_ACTUAL_COMPRESSION && 
+                (fileType.mime === 'text/plain' || 
+                 fileType.mime === 'text/csv' ||
+                 fileType.mime === 'application/pdf')) {
+                
+                compressionResult = await applyCompression(fileBuffer, fileType.mime, 'batch');
+                if (compressionResult.compressed) {
+                    preEncryptionBuffer = compressionResult.buffer;
+                }
+            }
+            
             const encryptionKey = crypto.scryptSync(JWT_SECRET, 'salt', 32);
             const iv = crypto.randomBytes(16);
             const cipher = crypto.createCipheriv('aes-256-gcm', encryptionKey, iv);
             const encryptedBuffer = Buffer.concat([
-                cipher.update(fileBuffer),
+                cipher.update(preEncryptionBuffer),
                 cipher.final(),
                 cipher.getAuthTag()
             ]);
@@ -1491,26 +1426,6 @@ router.post('/batch', checkStorageQuota, batchUpload.array('files', 5), asyncHan
             await fs.writeFile(file.path, Buffer.concat([iv, encryptedBuffer]));
             
             const fileHash = crypto.createHash('sha256').update(fileBuffer).digest('hex');
-            const originalSize = fileBuffer.length;
-            
-            // ACTUAL COMPRESSION for batch - ADDED
-            let compressedSize;
-            let compressionRatio;
-            if (USE_ACTUAL_COMPRESSION && fileType.mime !== 'image/jpeg' && fileType.mime !== 'image/png') {
-                try {
-                    const compressedBuffer = zlib.gzipSync(encryptedBuffer, { level: 6 });
-                    compressedSize = compressedBuffer.length;
-                    compressionRatio = ((encryptedBuffer.length - compressedSize) / encryptedBuffer.length * 100).toFixed(1);
-                    await fs.writeFile(file.path, Buffer.concat([iv, compressedBuffer]));
-                } catch (compressionError) {
-                    console.warn('Batch compression failed:', compressionError.message);
-                    compressedSize = encryptedBuffer.length;
-                    compressionRatio = '0%';
-                }
-            } else {
-                compressedSize = encryptedBuffer.length;
-                compressionRatio = fileType.mime.startsWith('image/') ? '0% (images)' : '0%';
-            }
             
             const newFile = {
                 id: uuidv4(),
@@ -1526,11 +1441,11 @@ router.post('/batch', checkStorageQuota, batchUpload.array('files', 5), asyncHan
                 publicAccess: false,
                 fileHash: fileHash,
                 compression: { 
-                    enabled: USE_ACTUAL_COMPRESSION, 
-                    originalSize, 
-                    compressedSize, 
-                    ratio: compressionRatio + '%',
-                    algorithm: USE_ACTUAL_COMPRESSION ? 'gzip' : 'none'
+                    enabled: compressionResult.compressed, 
+                    originalSize: fileBuffer.length, 
+                    compressedSize: preEncryptionBuffer.length, 
+                    ratio: compressionResult.ratio,
+                    algorithm: compressionResult.compressed ? 'gzip' : 'none'
                 },
                 encryption: { algorithm: 'aes-256-gcm', encrypted: true, iv: iv.toString('hex') },
                 versions: [{ version: 1, timestamp: new Date().toISOString(), size: file.size }],
@@ -1540,11 +1455,9 @@ router.post('/batch', checkStorageQuota, batchUpload.array('files', 5), asyncHan
             uploadedFiles.push(newFile);
             uploadedFilesInfo.push(newFile);
             
-            // Update user storage
             const currentUsage = userStorage.get(req.user.userId) || 0;
             userStorage.set(req.user.userId, currentUsage + file.size);
             
-            // Start processing with queue
             processFile(newFile.id);
             
         } catch (error) {
@@ -1553,7 +1466,6 @@ router.post('/batch', checkStorageQuota, batchUpload.array('files', 5), asyncHan
                 error: error.message,
                 code: error.code || 'UPLOAD_ERROR'
             });
-            // Clean up failed file
             if (file && file.path) {
                 try {
                     await fs.unlink(file.path);
@@ -1580,19 +1492,17 @@ router.post('/batch', checkStorageQuota, batchUpload.array('files', 5), asyncHan
             totalFiles: uploadedFilesInfo.length,
             totalSize: totalSize,
             successful: uploadedFilesInfo.length,
-            failed: errors.length,
-            compression: USE_ACTUAL_COMPRESSION ? 'actual_gzip_enabled' : 'simulated_only'
+            failed: errors.length
         }
     });
 }));
 
 // ==================== FILE SHARING ENDPOINT ====================
 router.post('/:fileId/share', authorizeFileAccess, asyncHandler(async (req, res) => {
-    const { expiresIn = 3600000 } = req.body; // 1 hour default in milliseconds
+    const { expiresIn = 3600000 } = req.body;
     const shareId = uuidv4();
     const expiresAt = Date.now() + parseInt(expiresIn);
     
-    // Create share record
     sharedFiles.set(shareId, {
         fileId: req.params.fileId,
         expiresAt,
@@ -1622,7 +1532,6 @@ router.get('/share/:shareId', asyncHandler(async (req, res) => {
     }
     
     if (Date.now() > share.expiresAt) {
-        // Clean up expired share
         sharedFiles.delete(req.params.shareId);
         return res.status(410).json({ 
             error: 'Share link expired',
@@ -1631,7 +1540,6 @@ router.get('/share/:shareId', asyncHandler(async (req, res) => {
         });
     }
     
-    // Find the file
     const file = uploadedFiles.find(f => f.id === share.fileId);
     if (!file) {
         return res.status(404).json({ 
@@ -1641,7 +1549,6 @@ router.get('/share/:shareId', asyncHandler(async (req, res) => {
         });
     }
     
-    // Redirect to download
     res.redirect(file.downloadUrl);
 }));
 
@@ -1655,13 +1562,11 @@ router.get('/access-logs', asyncHandler(async (req, res) => {
         });
     }
     
-    // Filter logs for this user if not admin
     let filteredLogs = accessLogs;
     if (req.user.role !== 'admin') {
         filteredLogs = accessLogs.filter(log => log.userId === req.user.userId);
     }
     
-    // Apply pagination
     const page = parseInt(req.query.page) || 1;
     const limit = Math.min(parseInt(req.query.limit) || 50, 200);
     const startIndex = (page - 1) * limit;
@@ -1685,16 +1590,16 @@ router.get('/queue/status', asyncHandler(async (req, res) => {
         processingFiles: uploadedFiles.filter(f => f.status === 'processing').length,
         waitingFiles: uploadedFiles.filter(f => f.status === 'uploaded').length,
         processedFiles: uploadedFiles.filter(f => f.status === 'processed').length,
-        failedFiles: uploadedFiles.filter(f => f.status === 'error').length
+        failedFiles: uploadedFiles.filter(f => f.status === 'error').length,
+        corruptedFiles: uploadedFiles.filter(f => f.status === 'corrupted').length
     });
 }));
 
-// Update file metadata with validation
+// Update file metadata
 router.put('/:fileId', authorizeFileAccess, asyncHandler(async (req, res) => {
     const { publicAccess, originalName } = req.body;
     const updates = {};
     
-    // Validate update data
     if (publicAccess !== undefined) {
         if (typeof publicAccess !== 'boolean') {
             return res.status(400).json({ 
@@ -1717,7 +1622,6 @@ router.put('/:fileId', authorizeFileAccess, asyncHandler(async (req, res) => {
         updates.originalName = originalName.trim();
     }
     
-    // Check ownership
     if (req.file.uploadedBy !== req.user.userId && req.user.role !== 'admin') {
         return res.status(403).json({ 
             error: 'Permission denied',
@@ -1726,7 +1630,6 @@ router.put('/:fileId', authorizeFileAccess, asyncHandler(async (req, res) => {
         });
     }
     
-    // Apply updates
     Object.keys(updates).forEach(key => {
         req.file[key] = updates[key];
     });
@@ -1737,9 +1640,8 @@ router.put('/:fileId', authorizeFileAccess, asyncHandler(async (req, res) => {
     });
 }));
 
-// Delete file with proper cleanup
+// Delete file
 router.delete('/:fileId', authorizeFileAccess, asyncHandler(async (req, res) => {
-    // Ownership check
     if (req.file.uploadedBy !== req.user.userId && req.user.role !== 'admin') {
         return res.status(403).json({
             error: 'Permission denied',
@@ -1762,7 +1664,6 @@ router.delete('/:fileId', authorizeFileAccess, asyncHandler(async (req, res) => 
     const userDir = path.join(UPLOAD_DIR, fileRecord.uploadedBy);
 
     try {
-        // Try to delete the physical file
         try {
             await fs.unlink(filePath);
             console.log(`Deleted file: ${filePath}`);
@@ -1772,14 +1673,11 @@ router.delete('/:fileId', authorizeFileAccess, asyncHandler(async (req, res) => 
             }
         }
 
-        // Update user storage
         const currentUsage = userStorage.get(fileRecord.uploadedBy) || 0;
         userStorage.set(fileRecord.uploadedBy, Math.max(0, currentUsage - (fileRecord.size || 0)));
 
-        // Remove metadata record
         uploadedFiles.splice(fileIndex, 1);
 
-        // Try to remove user directory if empty
         try {
             const remaining = await fs.readdir(userDir);
             if (remaining.length === 0) {
@@ -1787,7 +1685,6 @@ router.delete('/:fileId', authorizeFileAccess, asyncHandler(async (req, res) => 
                 console.log(`Removed empty user directory: ${userDir}`);
             }
         } catch (dirErr) {
-            // Ignore expected cases
             if (dirErr.code && dirErr.code !== 'ENOTEMPTY' && dirErr.code !== 'ENOENT') {
                 console.warn(`Failed to remove user dir: ${dirErr.message}`);
             }
@@ -1809,7 +1706,6 @@ router.delete('/:fileId', authorizeFileAccess, asyncHandler(async (req, res) => 
 
 // ==================== ENHANCED ERROR HANDLING MIDDLEWARE ====================
 router.use((err, req, res, next) => {
-    // Log error internally
     console.error('UPLOAD ROUTE ERROR:', {
         timestamp: new Date().toISOString(),
         method: req.method,
@@ -1818,8 +1714,7 @@ router.use((err, req, res, next) => {
         userId: req.user?.userId || 'anonymous',
         errorCode: err.code || 'UNKNOWN_ERROR',
         errorMessage: err.message || 'Unknown error',
-        errorType: err.name || 'Error',
-        stack: err.stack || 'No stack trace available'
+        errorType: err.name || 'Error'
     });
     
     let statusCode = 500;
@@ -1827,7 +1722,6 @@ router.use((err, req, res, next) => {
     let userMessage = 'Something went wrong. Please try again later.';
     let errorCode = 'INTERNAL_ERROR';
     
-    // Handle multer errors
     if (err instanceof multer.MulterError) {
         if (err.code === 'LIMIT_FILE_SIZE') {
             statusCode = 400;
@@ -1842,7 +1736,6 @@ router.use((err, req, res, next) => {
         }
     }
     
-    // Handle JWT errors
     else if (err.name === 'JsonWebTokenError') {
         statusCode = 401;
         errorMessage = 'Invalid token';
@@ -1857,7 +1750,6 @@ router.use((err, req, res, next) => {
         errorCode = 'TOKEN_EXPIRED';
     }
     
-    // Handle file validation errors
     else if (err.code && [
         'INVALID_FILE_TYPE',
         'INVALID_FILE_EXTENSION', 
@@ -1866,7 +1758,7 @@ router.use((err, req, res, next) => {
         'RATE_LIMIT_EXCEEDED',
         'FILE_VALIDATION_ERROR',
         'UNKNOWN_FILE_TYPE',
-        'INVALID_FILE_CONTENT',
+        'CORRUPTED_FILE',
         'FILE_VALIDATION_FAILED',
         'DUPLICATE_FILE',
         'EMPTY_FILE',
@@ -1886,7 +1778,6 @@ router.use((err, req, res, next) => {
         errorCode = err.code || 'FILE_VALIDATION_FAILED';
     }
     
-    // Handle other validation errors
     else if (err.message && (
         err.message.includes('File type') && err.message.includes('is not allowed') ||
         err.message.includes('File extension') && err.message.includes('is not allowed') ||
@@ -1901,7 +1792,6 @@ router.use((err, req, res, next) => {
         errorCode = 'FILE_VALIDATION_FAILED';
     }
     
-    // Handle resource not found errors
     else if (err.code === 'ENOENT' || err.message?.includes('not found')) {
         statusCode = 404;
         errorMessage = 'Resource not found';
@@ -1909,7 +1799,6 @@ router.use((err, req, res, next) => {
         errorCode = 'NOT_FOUND';
     }
     
-    // Handle permission denied errors
     else if (err.code === 'EACCES' || err.message?.includes('permission denied')) {
         statusCode = 403;
         errorMessage = 'Permission denied';
@@ -1917,7 +1806,6 @@ router.use((err, req, res, next) => {
         errorCode = 'PERMISSION_DENIED';
     }
     
-    // Handle authentication errors
     else if (err.code === 'AUTH_REQUIRED') {
         statusCode = 401;
         errorMessage = 'Authentication required';
@@ -1925,7 +1813,6 @@ router.use((err, req, res, next) => {
         errorCode = 'AUTH_REQUIRED';
     }
     
-    // Handle access denied errors
     else if (err.code === 'ACCESS_DENIED') {
         statusCode = 403;
         errorMessage = 'Access denied';
@@ -1933,7 +1820,6 @@ router.use((err, req, res, next) => {
         errorCode = 'ACCESS_DENIED';
     }
     
-    // Send clean response - NO DEBUG INFO
     res.status(statusCode).json({
         error: errorMessage,
         message: userMessage,
